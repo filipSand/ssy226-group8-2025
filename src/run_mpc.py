@@ -19,6 +19,8 @@ from configs import CircularRobotSpecification
 from visualizer.object import CircularVehicleVisualizer
 from visualizer.mpc_plot import MpcPlotInLoop # type: ignore
 
+from coordinator import Coordinator
+
 def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=False):
 
     DATA_NAME = "schedule_demo2_data" # "schedule_demo_data"
@@ -28,6 +30,8 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
     MONITOR_COST = False # if true, monitor the cost (this will slow down the simulation)
     VERBOSE = False
     TIMEOUT = 10000
+    COORDINATOR_PERIOD = 5 # How often should the coordinator run, in seconds
+    THRESHOLD = 15
 
     if recording:
         save_video_path = f'./Demo/{DATA_NAME}_{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.mp4'
@@ -78,6 +82,10 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
 
         path_coords, path_times = gpc.get_robot_schedule(rid)
         robot_manager.add_schedule(rid, np.asarray(robot_starts[str(rid)]), path_coords, path_times)
+
+    ### Set up the coordinator
+    coordinator = Coordinator(robot_manager, robot_ids, config_mpc.ts)
+    delays = []
 
     ### Run
     map_width  = max(np.asarray(boundary_coords)[:, 0]) - min(np.asarray(boundary_coords)[:, 0])
@@ -164,10 +172,21 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
         main_plotter.plot_in_loop(time=kt*config_mpc.ts, autorun=AUTORUN, zoom_in=None)
         if not incomplete:
             break
+        
+        # Evaluate if rescheduling should occur once per coordinator period
+        if config_mpc.ts * kt % COORDINATOR_PERIOD == 0:
+            delays_at_t = coordinator.evaluate(kt)
+            delays.append(delays_at_t)
+            print(f"Delay at time {config_mpc.ts * kt}: {delays_at_t} s")
+
+            #  TODO: implement
+            if max(delays_at_t) > THRESHOLD:
+                print("Exceeding threshold!")
 
 
     main_plotter.show()
     input('Press anything to finish!')
+    print(delays)
     main_plotter.close()
 
     # Convert actual_timetable to DataFrame and save to CSV
