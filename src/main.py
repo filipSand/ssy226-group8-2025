@@ -9,10 +9,10 @@ src_path = os.path.join(project_root, "src")
 data_path = os.path.join(project_root, "data")
 
 
-def general_funct(problem, scheduler=True, controller=True, naive_tracker=False, ignore_speed_ref=False, recording=False):
+def general_funct(path_to_problem, scheduler=True, controller=True, naive_tracker=False, ignore_speed_ref=False, recording=False):
     if scheduler:
         from pkg_sche.sp_comsat.Compo_slim import Compo_slim
-        instance, optimum, running_time, len_previous_routes, paths_changed, solution = Compo_slim(problem)
+        instance, optimum, running_time, len_previous_routes, paths_changed, solution = Compo_slim(path_to_problem)
         # save the schedule (I don't actually need this step, but it is more readable than the csv)
         with open(f"{src_path}/pkg_sche/MPC_input.json",'w') as logfile:
             json.dump(solution, logfile, indent=4)
@@ -23,7 +23,7 @@ def general_funct(problem, scheduler=True, controller=True, naive_tracker=False,
             for robot_id, nodes in solution.items():
                 for node_id, eta in nodes:
                     csv_writer.writerow([robot_id, node_id, eta])
-        with open(f"{data_path}/test_cases/{problem}.json",'r') as read_file:
+        with open(path_to_problem,'r') as read_file:
             data = json.load(read_file)
             ATRs = data['ATRs']
         robot_starts = {
@@ -39,17 +39,17 @@ def general_funct(problem, scheduler=True, controller=True, naive_tracker=False,
 
     if controller:
         from run_mpc import run_mpc
-        with open(f"{data_path}/test_cases/{problem}.json",'r') as read_file:
+        with open(path_to_problem,'r') as read_file:
             data = json.load(read_file)
             EnvFolder = data['test_data']['Environment']
         run_mpc(EnvFolder, naive_tracker=naive_tracker, ignore_speed_ref=ignore_speed_ref, recording=recording)
 
 if __name__ == "__main__":
-    problem = '4Small' # SAFETY COEFF 20
-    # problem = "10Large"
+    path_to_problem = './data/test_cases/4Small.json' # SAFETY COEFF 20
+    # path_to_problem = './data/test_cases/10Large.json' 
 
     general_funct(
-        problem,
+        path_to_problem,
         scheduler = True,
         controller= True,
         naive_tracker= False,

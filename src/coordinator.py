@@ -11,7 +11,7 @@ class Coordinator:
         self.robot_ids = robot_ids
         self.ts = ts
 
-    def evaluate(self, kt: int) -> float:
+    def evaluate(self, kt: int) -> list[float]:
         """
         Placeholder TODO
 
@@ -31,6 +31,7 @@ class Coordinator:
         for rid in self.robot_ids:
             robot_planner = self.robot_manager.get_planner(rid)
             robot_state = self.robot_manager.get_robot_state(rid)
+            max_vel = self.robot_manager.get_robot(rid).config.lin_vel_max
 
             ref_path = robot_planner._ref_path
             ref_path_times = robot_planner._ref_path_time
@@ -60,9 +61,8 @@ class Coordinator:
                 # If we're on the right segment, check the local plan: delay = time since we should have been at the last waypoint
                 # This is the easy case
                 # If we can cover the remaining distance by running at maximum speed, then no delay
-                max_vel = self.robot_manager.get_robot(rid).config.lin_vel_max
-                delay = self._calcuate_innode_delay(current_time, robot_state, scheduled_node, prev_sched_node, scheduled_departure_time, scheduled_arrival_time, max_vel)
-                
+                delay = self._calcuate_edge_delay(current_time, robot_state, scheduled_node, prev_sched_node, 
+                                                  scheduled_departure_time, scheduled_arrival_time, max_vel)
                 delays.append(delay)
                 continue
             
@@ -77,21 +77,22 @@ class Coordinator:
             pre_target = ref_path[robot_target_i - 1]
             robot_target_departure = ref_path_times[robot_target_i - 1]
             robot_target_arrival = ref_path_times[robot_target_i]
-            next_node_delay = self._calcuate_innode_delay(current_time, robot_state, target_node, 
-                                                            pre_target, robot_target_departure, robot_target_arrival)
+            next_node_delay = self._calcuate_edge_delay(current_time, robot_state, target_node, 
+                                                            pre_target, robot_target_departure, robot_target_arrival, max_vel)
 
             # All nodes we should have reached but haven't
             missing_nodes_delay = scheduled_departure_time - robot_target_arrival
 
             # How far we should have made it along the scheduled current edge
-            sched_current_edge_delay = self._calcuate_innode_delay(current_time, prev_sched_node, scheduled_node, prev_sched_node, scheduled_departure_time, scheduled_arrival_time)
+            sched_current_edge_delay = self._calcuate_edge_delay(current_time, prev_sched_node, scheduled_node, prev_sched_node, 
+                                                                 scheduled_departure_time, scheduled_arrival_time, max_vel)
 
             delay = next_node_delay + missing_nodes_delay + sched_current_edge_delay
             delays.append(delay)
 
         return delays
 
-    def _calcuate_innode_delay(self, current_time, robot_state, scheduled_node, prev_sched_node, departure_time, arrival_time, max_vel = None):
+    def _calcuate_edge_delay(self, current_time, robot_state, scheduled_node, prev_sched_node, departure_time, arrival_time, max_vel = None):
         """
         Estimate time delay between robot and scheduled position via linear interpolation.
         Args:
@@ -122,14 +123,34 @@ class Coordinator:
         offset_x = robot_state[0] - scheduled_x
         offset_y = robot_state[1] - scheduled_y
         total_offset = np.sqrt(offset_x**2 + offset_y**2)
-        delay = total_offset / velocity
-        
 
         # If the robot's maximum velocity is provided, ignore the delay calculation if the MPC controller can recover the delay on its own.
         if max_vel is not None :
+            delay = total_offset / max_vel
             fastest_possible = total_offset / max_vel
             if arrival_time > current_time + fastest_possible:
                 return 0
-                
-        return delay
-        
+            else:
+                return delay
+        else:
+            return total_offset / velocity
+
+    def reschedule(self) -> None:
+        """
+        1. Go to previous node
+        2. Figure out what jobs remain and rebuild the problem json file using these jobs
+        3. Figure out what edges are blocked
+        4. Call the scheduler
+        5. Implement the new schedule
+        6. Resume running
+        """
+        return
+    
+    def _set_all_idle(self) -> None:
+        for rid in self.robot_ids:
+            self.robot_manager.set_robot_idle(rid, True)
+
+    
+
+    def build_new_schedule(self) -> None:
+        return

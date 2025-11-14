@@ -16,16 +16,16 @@ from .path_changer_Gurobi import changer
 from .route_checker_slim import routes_checking
 
 
-def Compo_slim(problem):
+def Compo_slim(path_to_problem):
 
     print('COMPOSITIONAL ALGORITHM #### SLIM ####')
-    print('instance',problem)
+    print('instance',path_to_problem)
 
     starting_time = tm()
 
     # first of all, let's parse the json file with the plant layout and the tasks info
     jobs, nodes, edges, Autonomy, ATRs, charging_coefficient,Big_Number,hubs\
-        = json_parser(f'data/test_cases/{problem}.json')
+        = json_parser(path_to_problem)
     # now let's build the graph out of nodes and edges
     graph = nx.DiGraph()
 
@@ -40,7 +40,7 @@ def Compo_slim(problem):
     # print_graph(nodes,edges)
 
     The_Instance = Instance(
-        problem,
+        path_to_problem,
         graph,
         Autonomy,
         charging_coefficient,
