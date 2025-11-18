@@ -182,6 +182,7 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
             #  TODO: implement
             if max(delays_at_t) > THRESHOLD:
                 print("Exceeding threshold!")
+                coordinator.reschedule(kt)
 
 
     main_plotter.show()

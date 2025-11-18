@@ -68,11 +68,7 @@ class Coordinator:
             
             # If we're not, delay = time until next node + time since we should have left next node
             # Node index we are heading towards
-            robot_target_i = None
-            for i, node in enumerate(ref_path):
-                if node == target_node:
-                    robot_target_i = i
-                    break
+            robot_target_i = self._get_target_node_index(ref_path, target_node)
 
             pre_target = ref_path[robot_target_i - 1]
             robot_target_departure = ref_path_times[robot_target_i - 1]
@@ -91,6 +87,14 @@ class Coordinator:
             delays.append(delay)
 
         return delays
+
+    def _get_target_node_index(self, ref_path, target_node):
+        robot_target_i = None
+        for i, node in enumerate(ref_path):
+            if node == target_node:
+                robot_target_i = i
+                break
+        return robot_target_i
 
     def _calcuate_edge_delay(self, current_time, robot_state, scheduled_node, prev_sched_node, departure_time, arrival_time, max_vel = None):
         """
@@ -135,16 +139,27 @@ class Coordinator:
         else:
             return total_offset / velocity
 
-    def reschedule(self) -> None:
+    def reschedule(self, kt: int) -> None:
         """
-        1. Go to previous node
+        1. Go to next node, if not possible, go back
         2. Figure out what jobs remain and rebuild the problem json file using these jobs
         3. Figure out what edges are blocked
         4. Call the scheduler
         5. Implement the new schedule
         6. Resume running
         """
-        return
+        self._set_all_idle()
+        time = kt * self.ts
+
+        for rid in self.robot_ids:
+            robot_planner = self.robot_manager.get_planner(rid)
+            target_node = robot_planner.current_target_node
+            ref_path = robot_planner._ref_path
+            target_node_index = self._get_target_node_index(ref_path, target_node)
+            prev_node = ref_path[target_node_index-1]
+            ref_path_times = robot_planner._ref_path_time
+            prev_time = ref_path_times[target_node_index-1]
+            robot_planner.load_path([prev_node, target_node], [prev_time, time])
     
     def _set_all_idle(self) -> None:
         for rid in self.robot_ids:
@@ -153,4 +168,4 @@ class Coordinator:
     
 
     def build_new_schedule(self) -> None:
-        return
+        raise NotImplementedError
