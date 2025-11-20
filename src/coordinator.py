@@ -1,5 +1,9 @@
 from pkg_robot.robot import RobotManager
 import numpy as np
+import json
+from src.pkg_sche.sp_comsat.Compo_slim import Compo_slim
+
+
 
 
 class Coordinator:
@@ -14,6 +18,7 @@ class Coordinator:
     def evaluate(self, kt: int) -> list[float]:
         """
         Placeholder TODO
+        
 
         TODO Check if my delay/earlyness impacts other robots. If they don't its probably fine to be early
         Args:
@@ -25,7 +30,6 @@ class Coordinator:
         # Skip calculations intially
         if kt == 0:
             return [0.0]*len(self.robot_ids)
-
         current_time = kt * self.ts
         delays = []
         for rid in self.robot_ids:
@@ -134,7 +138,22 @@ class Coordinator:
                 return delay
         else:
             return total_offset / velocity
+    
+    def get_the_dirction_of_robot(self,scheduled_node,prev_sched_node):
+        dircetion_id = []
+        for rid in self.robot_ids:
+            if scheduled_node[0] ==  prev_sched_node[0] and scheduled_node[0] >  prev_sched_node[0]:
+                dircetion_id.append("up")
+            elif scheduled_node[0] ==  prev_sched_node[0] and scheduled_node[0] <  prev_sched_node[0]:
+                dircetion_id.append("down ")
+            elif scheduled_node[0] <  prev_sched_node[0] and scheduled_node[0] ==  prev_sched_node[0]:
+                dircetion_id.append("left")
+            else:
+                dircetion_id.append("right")
 
+        return dircetion_id
+    
+            
     def reschedule(self) -> None:
         """
         1. Go to previous node
