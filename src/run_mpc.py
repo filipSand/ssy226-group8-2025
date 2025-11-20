@@ -21,7 +21,7 @@ from visualizer.mpc_plot import MpcPlotInLoop # type: ignore
 
 from coordinator import Coordinator
 
-def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=False):
+def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=False, problem_path=None):
 
     DATA_NAME = "schedule_demo2_data" # "schedule_demo_data"
     CFG_FNAME = "mpc_fast.yaml" # "mpc_default.yaml" or "mpc_fast.yaml"
@@ -84,7 +84,7 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
         robot_manager.add_schedule(rid, np.asarray(robot_starts[str(rid)]), path_coords, path_times)
 
     ### Set up the coordinator
-    coordinator = Coordinator(robot_manager, robot_ids, config_mpc.ts)
+    coordinator = Coordinator(robot_manager, robot_ids, config_mpc.ts, problem_path)
     delays = []
 
     ### Run

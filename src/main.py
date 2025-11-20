@@ -42,7 +42,7 @@ def general_funct(path_to_problem, scheduler=True, controller=True, naive_tracke
         with open(path_to_problem,'r') as read_file:
             data = json.load(read_file)
             EnvFolder = data['test_data']['Environment']
-        run_mpc(EnvFolder, naive_tracker=naive_tracker, ignore_speed_ref=ignore_speed_ref, recording=recording)
+        run_mpc(EnvFolder, naive_tracker=naive_tracker, ignore_speed_ref=ignore_speed_ref, recording=recording, problem_path=path_to_problem)
 
 if __name__ == "__main__":
     path_to_problem = './data/test_cases/4Small.json' # SAFETY COEFF 20
