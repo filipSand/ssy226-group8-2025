@@ -217,22 +217,6 @@ class Coordinator:
 
 
     
-    def get_robot_position(self, rid: str) -> list[float]:
-        """
-        Get the current position of a specific robot.
-    
-        Args:
-            rid: Robot ID
-    
-        Returns:
-            list[float]: [x, y] position
-        """
-        return self.robot_manager.get_robot_state(rid)
-        
-        
-
-
-  
 
     def reschedule(self, kt: int) -> None:
         """
