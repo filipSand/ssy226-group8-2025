@@ -1,25 +1,39 @@
+from configs import CircularRobotSpecification
 from pkg_robot.robot import RobotManager
 import numpy as np
 import json
+import copy
+
+from pkg_sche.sp_comsat.Compo_slim import Compo_slim
+from pkg_motion_plan import GlobalPathCoordinator
 
 
 class Coordinator:
     """
     Coordinator class - TODO document
     """
-    def __init__(self, robot_manager: RobotManager, robot_ids: list[str], ts: float, schedule: str|None = None) -> None:
+    def __init__(self, robot_manager: RobotManager, robot_ids: list[str], ts: float, graph_path: str, map_path: str, config_robot: CircularRobotSpecification, schedule: str|None = None) -> None:
         self.robot_manager = robot_manager
         self.robot_ids = robot_ids
         self.ts = ts
-        self.schedule = schedule
+        self.task = schedule
+        self.graph_path = graph_path
+        self.config_robot = config_robot
+        self.map_path = map_path
+        self.mode = 'normal'  # normal or rescheduling
+        self.new_schedule_path = None
 
-    def evaluate(self, kt: int) -> list[float]:
+    def get_mode(self) -> str:
+        return self.mode
+
+    def evaluate(self, kt: int, threshold: float) -> list[float]:
         """
         Placeholder TODO
 
         TODO Check if my delay/earlyness impacts other robots. If they don't its probably fine to be early
         Args:
             kt: The current time step
+            threshold: The greatest delay of a single robot that can be tolerated before rescheduling is started
         Returns:
             delay: The sum of the schedule delay for all robots, in seconds
         """
@@ -85,6 +99,9 @@ class Coordinator:
 
             delay = next_node_delay + missing_nodes_delay + sched_current_edge_delay
             delays.append(delay)
+
+        if max(delays) > threshold:
+            self.mode = "delayed"
 
         return delays
 
@@ -152,7 +169,8 @@ class Coordinator:
         #self._set_all_idle()
         time = kt * self.ts
 
-        new_schedule_path = self.build_new_schedule(kt)
+        self.new_schedule_path = self.build_new_schedule(kt)
+        self.set_all_idle_mode(True)
 
         # Stop all robots
         for rid in self.robot_ids:
@@ -163,13 +181,37 @@ class Coordinator:
             prev_node = ref_path[target_node_index-1]
             ref_path_times = robot_planner._ref_path_time
             prev_time = ref_path_times[target_node_index-1]
-            robot_planner.load_path([prev_node, target_node], [prev_time, time])
+            robot_state = self.robot_manager.get_robot_state(rid)
+            self.robot_manager.add_schedule(rid, robot_state, [prev_node, target_node], [prev_time, time])
 
-        
+        self.mode = "stopping_for_rescheduling"
 
-    def set_all_idle(self) -> None:
+    def write_new_schedule(self, schedule_path = None) -> None:
+        if schedule_path is None:
+            if self.new_schedule_path is None:
+                raise ValueError("No new schedule to write!")
+            schedule_path = self.new_schedule_path
+
+        self.set_all_idle_mode(True)
+
+        _, _, _, _, _, solution = Compo_slim(self.new_schedule_path)
+        new_gpc = GlobalPathCoordinator.from_dict(solution)
+        # Loading graph and map, as suggested by documentation
+        new_gpc.load_graph_from_json(self.graph_path)
+        new_gpc.load_map_from_json(self.map_path, inflation_margin=self.config_robot.vehicle_width+self.config_robot.vehicle_margin)
+
         for rid in self.robot_ids:
-            self.robot_manager.set_robot_idle(rid, True)
+            robot_state = self.robot_manager.get_robot_state(rid)
+
+            path_coords, path_times = new_gpc.get_robot_schedule(rid)
+            self.robot_manager.add_schedule(rid, robot_state, path_coords, path_times)
+        
+        self.set_all_idle_mode(False)
+        self.mode = "normal"
+
+    def set_all_idle_mode(self, mode: bool) -> None:
+        for rid in self.robot_ids:
+            self.robot_manager.set_robot_idle(rid, mode)
 
     def get_node_coord_from_name(self, nodes: dict, node_name: str):
         if node_name in nodes:
@@ -182,21 +224,15 @@ class Coordinator:
                 return name
         raise ValueError(f"Node at {node_coords} not in nodes")
 
-
     def build_new_schedule(self, kt: int, path_to_new_task: str = "./new_task.json") -> str:
-        if self.schedule is None:
-            raise ValueError("No schedule file provided for rescheduling.")
+        if self.task is None:
+            raise ValueError("No task file provided for rescheduling.")
         
-        with open(self.schedule, 'r') as f:
-            base_schedule = json.load(f)
-        nodes = base_schedule["test_data"]["nodes"]
-        jobs = base_schedule["jobs"]
+        with open(self.task, 'r') as f:
+            base_task = json.load(f)
+        nodes = base_task["test_data"]["nodes"]
+        jobs = base_task["jobs"]
 
-        # Find next node for each robot
-        # Is this a job? If not, iterate backwards until we find last completed job
-        # Remove all prior jobs from the job list
-        # Set the new start job and set starting positions to current positions
-        # Rebuild json
         new_jobs = {}
         new_ATRs = {}
 
@@ -204,50 +240,52 @@ class Coordinator:
             robot_planner = self.robot_manager.get_planner(rid)
             node_idx = robot_planner._current_target_node_idx
             ref_path = robot_planner._ref_path
-            jobs_for_rid = {job: jobs[job] for job in jobs if jobs[job]["ATR"] == [rid]}
+            jobs_for_rid = {
+                job: copy.deepcopy(jobs[job])
+                for job in jobs
+                if jobs[job]["ATR"] == [rid]
+            }
 
-            # Set start position TODO make this assignment better
-            new_ATRs.update({rid: self.get_node_name_from_coord(nodes, ref_path[node_idx])})
-
-            # Find last completed job
             last_completed_job = None
             for i in range(node_idx - 1, -1, -1):
                 node_coord = ref_path[i]
                 node_name = self.get_node_name_from_coord(nodes, node_coord)
-                for job_name in jobs_for_rid:
-                    if jobs_for_rid[job_name]["location"] == node_name:
+                for job_name, job_data in jobs_for_rid.items():
+                    if job_data["location"] == node_name:
                         last_completed_job = job_name
                         break
                 if last_completed_job is not None:
                     break
 
-            # Remove last_completed_job and all previous jobs
-            #  if None, no jobs have been completed so do nothing
-            if last_completed_job is not None:
-                for job_name in sorted(list(jobs_for_rid.keys())):
-                    jobs_for_rid.pop(job_name)
-                    if job_name == last_completed_job:
-                        break
-            
-            #Force the new first job to not have any precedence requirements
-            for job in jobs_for_rid:
-                # TODO Dumb way to get the first element of a dictionary, better way must surely exist?
-                jobs_for_rid[job]['precedence'] = []
-                break
+            if last_completed_job is not None and last_completed_job in jobs_for_rid:
+                job_sequence = list(jobs_for_rid.keys())
+                cutoff = job_sequence.index(last_completed_job)
+                for job_name in job_sequence[:cutoff + 1]:
+                    jobs_for_rid.pop(job_name, None)
+
+            if not jobs_for_rid:
+                continue
+
+            remaining_names = set(jobs_for_rid.keys())
+            ordered_jobs = list(jobs_for_rid.items())
+            first_key, first_job = ordered_jobs[0]
+            first_job["precedence"] = []
+            for job_name, job_data in ordered_jobs[1:]:
+                job_data["precedence"] = [
+                    dep for dep in job_data.get("precedence", [])
+                    if dep in remaining_names
+                ]
 
             new_jobs.update(jobs_for_rid)
 
-        new_json = base_schedule
+            if jobs_for_rid:
+                new_ATRs[rid] = self.get_node_name_from_coord(nodes, ref_path[node_idx])
+
+        new_json = copy.deepcopy(base_task)
         new_json["jobs"] = new_jobs
         new_json["ATRs"] = new_ATRs
 
         with open(path_to_new_task, "w") as f:
-            json.dump(new_json, f)
+            json.dump(new_json, f, indent=2)
 
         return path_to_new_task
-        
-
-            
-
-
-

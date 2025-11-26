@@ -84,7 +84,7 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
         robot_manager.add_schedule(rid, np.asarray(robot_starts[str(rid)]), path_coords, path_times)
 
     ### Set up the coordinator
-    coordinator = Coordinator(robot_manager, robot_ids, config_mpc.ts, problem_path)
+    coordinator = Coordinator(robot_manager, robot_ids, config_mpc.ts, graph_path, map_path, config_robot, problem_path)
     delays = []
 
     ### Run
@@ -175,14 +175,22 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
         
         # Evaluate if rescheduling should occur once per coordinator period
         if config_mpc.ts * kt % COORDINATOR_PERIOD == 0:
-            delays_at_t = coordinator.evaluate(kt)
+            delays_at_t = coordinator.evaluate(kt, THRESHOLD)
             delays.append(delays_at_t)
             print(f"Delay at time {config_mpc.ts * kt}: {delays_at_t} s")
 
             #  TODO: implement
-            if max(delays_at_t) > THRESHOLD:
-                print("Exceeding threshold!")
+            if coordinator.get_mode() == "delayed":
                 coordinator.reschedule(kt)
+
+            if coordinator.get_mode() == "stopping_for_rescheduling":
+                ready_to_start = []
+                for rid in robot_ids:
+                    controller = robot_manager.get_controller(rid)
+                    ready_to_start.append(controller.check_termination_condition())
+                if False:
+                    coordinator.write_new_schedule()
+
 
 
     main_plotter.show()
