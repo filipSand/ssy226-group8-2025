@@ -1,6 +1,7 @@
 from configs import CircularRobotSpecification
 from pkg_robot.robot import RobotManager
 import numpy as np
+import pandas as pd
 import json
 import copy
 
@@ -162,7 +163,7 @@ class Coordinator:
         1. Go to next node, if not possible, go back DONE
         2. Figure out what jobs remain and rebuild the problem json file using these jobs DONE
         3. Figure out what edges are blocked TODO
-        4. Call the scheduler TODO
+        4. Call the scheduler DONE
         5. Implement the new schedule TODO
         6. Resume running TODO 
         """
@@ -186,7 +187,17 @@ class Coordinator:
 
         self.mode = "stopping_for_rescheduling"
 
-    def write_new_schedule(self, schedule_path = None) -> None:
+    def write_new_schedule(self, kt: int, schedule_path = None) -> None:
+        """
+        Docstring for write_new_schedule
+        
+        :param self: Description
+        :param kt: Description
+        :type kt: int
+        :param schedule_path: Description
+        """
+        time = kt*self.ts
+
         if schedule_path is None:
             if self.new_schedule_path is None:
                 raise ValueError("No new schedule to write!")
@@ -195,7 +206,8 @@ class Coordinator:
         self.set_all_idle_mode(True)
 
         _, _, _, _, _, solution = Compo_slim(self.new_schedule_path)
-        new_gpc = GlobalPathCoordinator.from_dict(solution)
+        schedule_df = self.create_schedule_df(solution)
+        new_gpc = GlobalPathCoordinator(schedule_df)
         # Loading graph and map, as suggested by documentation
         new_gpc.load_graph_from_json(self.graph_path)
         new_gpc.load_map_from_json(self.map_path, inflation_margin=self.config_robot.vehicle_width+self.config_robot.vehicle_margin)
@@ -203,7 +215,7 @@ class Coordinator:
         for rid in self.robot_ids:
             robot_state = self.robot_manager.get_robot_state(rid)
 
-            path_coords, path_times = new_gpc.get_robot_schedule(rid)
+            path_coords, path_times = new_gpc.get_robot_schedule(rid, time_offset=time)
             self.robot_manager.add_schedule(rid, robot_state, path_coords, path_times)
         
         self.set_all_idle_mode(False)
@@ -289,3 +301,25 @@ class Coordinator:
             json.dump(new_json, f, indent=2)
 
         return path_to_new_task
+    
+    def create_schedule_df(self, solution: dict) -> dict:
+        ROBOT_ID = "robot_id"
+        NODE_ID = "node_id"
+        ETA = "ETA"
+        reformatted = {ROBOT_ID: [], NODE_ID: [], ETA: []}
+        rows = []
+        for rid in solution:
+            for node_eta_pair in solution[rid]:
+                node = node_eta_pair[0]
+                eta = node_eta_pair[1]
+                new_row = [rid, node, eta]
+                rows.append(new_row)
+
+        for row in rows:
+            reformatted[ROBOT_ID].append(row[0])
+            reformatted[NODE_ID].append(row[1])
+            reformatted[ETA].append(row[2])
+
+        df = pd.DataFrame(reformatted)
+        return df
+

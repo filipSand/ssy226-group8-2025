@@ -32,6 +32,7 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
     TIMEOUT = 10000
     COORDINATOR_PERIOD = 5 # How often should the coordinator run, in seconds
     THRESHOLD = 15
+    can_schedule = True
 
     if recording:
         save_video_path = f'./Demo/{DATA_NAME}_{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.mp4'
@@ -145,10 +146,10 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
                                                            other_robot_states=other_robot_states,
                                                            map_updated=True, report_cost=False, ignore_speed_ref=ignore_speed_ref)
             
-            controller.report_cost(debug_info['cost'],
-                                   debug_info['step_runtime'],
-                                   debug_info['monitored_cost'],
-                                   object_id=f"Robot {rid}")
+            #controller.report_cost(debug_info['cost'],
+            #                       debug_info['step_runtime'],
+            #                       debug_info['monitored_cost'],
+            #                       object_id=f"Robot {rid}")
 
             if not actual_timetable[rid] or actual_timetable[rid][-1][1] != gpc.get_node_id(planner._current_target_node):
                 actual_timetable[rid].append((kt*config_mpc.ts, gpc.get_node_id(planner._current_target_node)))
@@ -174,22 +175,28 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
             break
         
         # Evaluate if rescheduling should occur once per coordinator period
-        if config_mpc.ts * kt % COORDINATOR_PERIOD == 0:
+        time = config_mpc.ts * kt
+        
+        if time % COORDINATOR_PERIOD == 0 and can_schedule:
             delays_at_t = coordinator.evaluate(kt, THRESHOLD)
             delays.append(delays_at_t)
-            print(f"Delay at time {config_mpc.ts * kt}: {delays_at_t} s")
+            print(f"Delay at time {time}: {delays_at_t} s")
 
-            #  TODO: implement
             if coordinator.get_mode() == "delayed":
                 coordinator.reschedule(kt)
-
+            
             if coordinator.get_mode() == "stopping_for_rescheduling":
                 ready_to_start = []
                 for rid in robot_ids:
-                    controller = robot_manager.get_controller(rid)
-                    ready_to_start.append(controller.check_termination_condition())
-                if False:
-                    coordinator.write_new_schedule()
+                    state = robot_manager.get_robot_state(rid)
+                    target = robot_manager.get_goal_state(rid)
+                    PROXIMITY = 0.5
+                    condition = np.linalg.norm((state[:2] - target[:2])) < PROXIMITY
+                    ready_to_start.append(condition)
+                if all(ready_to_start):
+                    coordinator.write_new_schedule(kt)
+                    can_schedule = False
+
 
 
 
