@@ -23,6 +23,7 @@ class Coordinator:
         self.map_path = map_path
         self.mode = 'normal'  # normal or rescheduling
         self.new_schedule_path = None
+        self.occupied_for_reset = []
 
     def get_mode(self) -> str:
         return self.mode
@@ -183,6 +184,11 @@ class Coordinator:
             ref_path_times = robot_planner._ref_path_time
             prev_time = ref_path_times[target_node_index-1]
             robot_state = self.robot_manager.get_robot_state(rid)
+
+            if target_node in self.occupied_for_reset:
+                # If the target is occupied, return to previous node instead
+                target_node, prev_node = prev_node, target_node
+            self.occupied_for_reset.append(target_node)
             self.robot_manager.add_schedule(rid, robot_state, [prev_node, target_node], [prev_time, time])
 
         self.mode = "stopping_for_rescheduling"
@@ -197,6 +203,9 @@ class Coordinator:
         :param schedule_path: Description
         """
         time = kt*self.ts
+
+        # Reset the occupied list for the next rescheduling
+        self.occupied_for_reset = []
 
         if schedule_path is None:
             if self.new_schedule_path is None:
