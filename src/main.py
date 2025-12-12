@@ -67,7 +67,7 @@ if __name__ == "__main__":
     #path_to_problem = './data/test_cases/4Small.json' # SAFETY COEFF 20
     #path_to_problem = './data/test_cases/10Large.json' 
     #path_to_problem = './data/test_cases/2Small.json'
-    path_to_problem = './data/test_cases/3Small.json'
+    path_to_problem = './data/test_cases/4Small.json'
 
     general_funct(
         path_to_problem,

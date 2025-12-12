@@ -165,7 +165,8 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
             main_plotter.update_plot(rid, kt, actions[-1], None, debug_info['cost'], np.asarray(pred_states), current_refs)
             visualizer.update(*robot.state)
 
-            if not controller.check_termination_condition(external_check=planner.idle):
+            is_coordinating = coordinator.get_mode() != "normal"
+            if not is_coordinating or not controller.check_termination_condition(external_check=planner.idle):
                 incomplete = True
 
             robot_states.append(robot.state)
