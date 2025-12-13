@@ -4,7 +4,9 @@ import json
 import csv
 import math
 
-
+print("is this schduling form the intial postion of all four Robots answer with y or n")
+take_input = input()
+ini_sch = take_input.lower()
 
 project_root = pathlib.Path(__file__).resolve().parents[1]
 src_path = os.path.join(project_root, "src")
@@ -28,31 +30,42 @@ def general_funct(path_to_problem, scheduler=True, controller=True, naive_tracke
         with open(path_to_problem,'r') as read_file:
             data = json.load(read_file)
             ATRs = data['ATRs']
+
         #------------------make the intial direction of the robots to be the same as trajectory------------------------------------------
-        robot_starts = {}
-        for robot_id, nodes in solution.items():
-            start_node_id = ATRs[robot_id]
-            start_x = data['test_data']['nodes'][start_node_id]['x']
-            start_y = data['test_data']['nodes'][start_node_id]['y']
-            # Find the first node the robot will move to (after its start)
-            if nodes and len(nodes) > 1:
-                first_path_node_id = nodes[1][0]  # nodes[0] is the start, nodes[1] is the first move
-                first_x = data['test_data']['nodes'][first_path_node_id]['x']
-                first_y = data['test_data']['nodes'][first_path_node_id]['y']
-                direction = math.atan2(first_y - start_y, first_x - start_x)
-            else:
-                direction = -1.57  # fallback if no path
-            robot_starts[robot_id] = [start_x, start_y, direction]
+        if ini_sch == "y": 
+            robot_starts = {}
+            for robot_id, nodes in solution.items():
+                start_node_id = ATRs[robot_id]
+                start_x = data['test_data']['nodes'][start_node_id]['x']
+                start_y = data['test_data']['nodes'][start_node_id]['y']
+                # Find the first node the robot will move to (after its start)
+                if nodes and len(nodes) > 1:
+                    first_path_node_id = nodes[1][0]  # nodes[0] is the start, nodes[1] is the first move
+                    first_x = data['test_data']['nodes'][first_path_node_id]['x']
+                    first_y = data['test_data']['nodes'][first_path_node_id]['y']
+                    direction = math.atan2(first_y - start_y, first_x - start_x)
+                else:
+                    direction = -1.57  # fallback if no path
+                robot_starts[robot_id] = [start_x, start_y, direction]
+        else:
+            robot_starts = {
+                key:[
+                    data['test_data']['nodes'][value]['x'],
+                    data['test_data']['nodes'][value]['y'],
+                    -1.57
+                ]
+                for key,value in ATRs.items()
+            }
         #-----------------------------------it is end here -----------------------------------------------------------
         # the orignal code what we get form sabino is down here 
-        # robot_starts = {
-        #     key:[
-        #         data['test_data']['nodes'][value]['x'],
-        #         data['test_data']['nodes'][value]['y'],
-        #         -1.57
-        #     ]
-        #     for key,value in ATRs.items()
-        # }
+            robot_starts = {
+                key:[
+                    data['test_data']['nodes'][value]['x'],
+                    data['test_data']['nodes'][value]['y'],
+                    -1.57
+                ]
+                for key,value in ATRs.items()
+            }
         with open(f"{data_path}/schedule_demo2_data/robot_start.json", 'w') as write_file:
             json.dump(robot_starts, write_file, indent=4)
 
