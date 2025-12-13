@@ -54,24 +54,39 @@ class Coordinator:
             ref_path = robot_planner._ref_path
             ref_path_times = robot_planner._ref_path_time
             target_node = robot_planner.current_target_node
-            path_idx = None
-            #Find the node that we should be heading towards
+            schedule_idx = None
+
+            target_is_final = False
+            # If the time is greater than the finishing time, we should be heading towards the final node
+            if current_time > ref_path_times[-1]:
+                schedule_idx = len(ref_path_times) - 1
+                target_is_final = True
+            # else:
+            # #Find the node that we should be heading towards
             for i, ref_time in enumerate(ref_path_times):
                 if current_time > ref_time:
                     continue
-                else:
-                    path_idx = i
-                    break
-            
-            if path_idx is None:
+                schedule_idx = i
+                break
+                
+            if schedule_idx is None:
                 # If the robot has reached the finish line, set zero delay
+                raise ValueError("This shouldn't be reached")
                 delays.append(0)
                 continue
 
-            scheduled_node = ref_path[path_idx]
-            prev_sched_node = ref_path[path_idx - 1] 
-            scheduled_departure_time = ref_path_times[path_idx-1]
-            scheduled_arrival_time = ref_path_times[path_idx]
+            scheduled_node = ref_path[schedule_idx]
+            prev_sched_node = ref_path[schedule_idx - 1] 
+            scheduled_departure_time = ref_path_times[schedule_idx-1]
+            scheduled_arrival_time = ref_path_times[schedule_idx]
+
+            if target_is_final:
+                # Check if we're close to the target, if we are, we are finished and there is no delay
+                target = np.array([*target_node])
+                if np.linalg.norm((robot_state[:2] - target), 2) < 0.5:
+                    delays.append(0)
+                    continue
+
             
             if scheduled_node == target_node:
                 # If we're on the right segment, check the local plan: delay = time since we should have been at the last waypoint
@@ -185,7 +200,9 @@ class Coordinator:
             prev_time = ref_path_times[target_node_index-1]
             robot_state = self.robot_manager.get_robot_state(rid)
 
-            if target_node in self.occupied_for_reset:
+            distance_to_target = np.sqrt(target_node[0]**2 + target_node[1]**2)
+            distance_to_prev = np.sqrt(prev_node[0]**2 + prev_node[1]**2)
+            if distance_to_target > distance_to_prev:
                 # If the target is occupied, return to previous node instead
                 target_node, prev_node = prev_node, target_node
             self.occupied_for_reset.append(target_node)
@@ -212,9 +229,13 @@ class Coordinator:
                 raise ValueError("No new schedule to write!")
             schedule_path = self.new_schedule_path
 
-        self.set_all_idle_mode(True)
+        self.set_all_idle_mode(True),
 
         _, _, _, _, _, solution = Compo_slim(self.new_schedule_path)
+        if solution == {}:
+            raise ValueError("No valid scheduling solution!")
+
+            
         schedule_df = self.create_schedule_df(solution)
         new_gpc = GlobalPathCoordinator(schedule_df)
         # Loading graph and map, as suggested by documentation
@@ -225,6 +246,11 @@ class Coordinator:
             robot_state = self.robot_manager.get_robot_state(rid)
 
             path_coords, path_times = new_gpc.get_robot_schedule(rid, time_offset=time)
+            
+            first_time = path_times[0]
+            if first_time != time:
+                print(f"{rid} start time is not {time} but {first_time}, setting to time")
+                path_times[0] = time
             self.robot_manager.add_schedule(rid, robot_state, path_coords, path_times)
         
         self.set_all_idle_mode(False)
@@ -256,6 +282,7 @@ class Coordinator:
 
         new_jobs = {}
         new_ATRs = {}
+        occupited_start_node = set()
 
         for rid in self.robot_ids:
             robot_planner = self.robot_manager.get_planner(rid)
@@ -267,16 +294,12 @@ class Coordinator:
                 if jobs[job]["ATR"] == [rid]
             }
 
-            last_completed_job = None
-            for i in range(node_idx - 1, -1, -1):
-                node_coord = ref_path[i]
-                node_name = self.get_node_name_from_coord(nodes, node_coord)
-                for job_name, job_data in jobs_for_rid.items():
-                    if job_data["location"] == node_name:
-                        last_completed_job = job_name
-                        break
-                if last_completed_job is not None:
-                    break
+            planner = self.robot_manager.get_planner(rid)
+            jobs_completed = planner.get_jobs_completed()
+            if jobs_completed == 0:
+                last_completed_job = None
+            else:
+                last_completed_job = planner.get_job_by_index(jobs_completed - 1)
 
             if last_completed_job is not None and last_completed_job in jobs_for_rid:
                 job_sequence = list(jobs_for_rid.keys())
@@ -300,7 +323,20 @@ class Coordinator:
             new_jobs.update(jobs_for_rid)
 
             if jobs_for_rid:
-                new_ATRs[rid] = self.get_node_name_from_coord(nodes, ref_path[node_idx])
+                next_node = ref_path[node_idx]
+                prev_node = ref_path[node_idx - 1]
+                next_node_name = self.get_node_name_from_coord(nodes, ref_path[node_idx])
+                prev_node_name = self.get_node_name_from_coord(nodes, ref_path[node_idx - 1])
+                
+                distance_to_target = np.sqrt(next_node[0]**2 + next_node[1]**2)
+                distance_to_prev = np.sqrt(prev_node[0]**2 + prev_node[1]**2)
+
+                if distance_to_target > distance_to_prev:
+                    # If the target is occupied, return to previous node instead
+                    new_ATRs[rid] = prev_node_name
+                else:
+                    new_ATRs[rid] = next_node_name
+
 
         new_json = copy.deepcopy(base_task)
         new_json["jobs"] = new_jobs
@@ -331,4 +367,26 @@ class Coordinator:
 
         df = pd.DataFrame(reformatted)
         return df
+
+    def rotate_in_place(self):
+        """
+        Rotates all robots in place to resolve issues with the controller.
+        This follows from the Duckiebots which may rotate in place, but
+        this breaks the Unicycle defintion of the robots. Still, required
+        to make progress for now
+        
+        :param self: Coordinator
+        """
+        for rid in self.robot_ids:
+            state = self.robot_manager.get_robot_state(rid)
+            start_x = state[0]
+            start_y = state[1]
+
+            planner = self.robot_manager.get_planner(rid)
+            target = planner._ref_path[1] # Target node, i.e. first node, will be start, which is not helpful
+            direction = np.atan2(target[1] - start_y, target[0] - start_x)
+            new_state = np.array([start_x, start_y, direction])
+            self.robot_manager.set_robot_state(rid, new_state)
+
+
 

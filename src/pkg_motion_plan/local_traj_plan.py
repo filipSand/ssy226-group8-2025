@@ -4,6 +4,8 @@ from typing import Optional, Any
 import numpy as np
 from scipy import interpolate # type: ignore
 from matplotlib.axes import Axes # type: ignore
+import json
+import copy
 
 from ._ref_traj_generation import TrajectoryGeneration
 from .path_plan_cspace import visibility # optional if don't need to use the local replanner
@@ -25,7 +27,7 @@ class LocalTrajPlanner:
         The path must be loaded for any methods to work.
         To use the local replanner, call `load_map` first.
     """
-    def __init__(self, sampling_time: float, horizon: int, max_speed: float, verbose:bool=False) -> None:
+    def __init__(self, sampling_time: float, horizon: int, max_speed: float, name: str, task_path: str, verbose:bool=False) -> None:
         """The local planner takes path nodes and ETAs as inputs, and outputs local reference.
 
         Args:
@@ -37,6 +39,9 @@ class LocalTrajPlanner:
         self.N_hor = horizon
         self.v_max = max_speed
         self.vb = verbose
+        self.name = name
+        self.jobs_completed = 0
+        self.jobs = self.discover_and_set_jobs(task_path)
 
         self.path_planner:Optional[Any] = None
 
@@ -303,3 +308,37 @@ class LocalTrajPlanner:
     def plot_schedule(self, ax: Axes, plot_args:dict={'c':'r'}):
         ax.plot(self.ref_traj[:,0], self.ref_traj[:,1], 'o', markerfacecolor='none', **plot_args)
 
+    def discover_and_set_jobs(self, task_path: str):
+        """
+        Docstring for _get_my_jobs
+        
+        :param self: self
+        :param task_path: Path to original problem definiton with jobs
+        :type task_path: str
+        """
+        with open(task_path, 'r') as f:
+            problem = json.load(f)
+        
+        jobs = problem["jobs"]
+        jobs_for_rid = {
+                job: copy.deepcopy(jobs[job])
+                for job in jobs
+                if jobs[job]["ATR"] == [self.name]
+            }
+        return jobs_for_rid
+    
+    def get_job_by_index(self, index: int) -> dict:
+        sorted_name = sorted(self.jobs.keys())
+        return self.jobs[sorted_name[index]]
+    
+    def get_jobs_completed(self) -> int:
+        return self.jobs_completed
+    
+    def set_jobs_completed(self, x: int):
+        self.jobs_completed = x
+
+    def get_current_job(self) -> dict:
+        return self.get_job_by_index(self.jobs_completed)
+    
+    def increment_jobs_completed(self):
+        self.jobs_completed += 1 

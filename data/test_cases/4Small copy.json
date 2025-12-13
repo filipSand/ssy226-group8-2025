@@ -81,7 +81,7 @@
             "ATR": ["A2"]
         },
         "14": {
-            "location": "N34",
+            "location": "N31",
             "precedence": ["13"],
             "TW": [],
             "Service": 0,
@@ -109,7 +109,7 @@
             "ATR": ["A3"]
         },
         "24": {
-            "location": "N31",
+            "location": "N11",
             "precedence": ["23"],
             "TW": [],
             "Service": 0,

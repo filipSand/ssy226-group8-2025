@@ -178,6 +178,12 @@ def schedule(the_instance, current_routes):
         if route_i.length > 0
     ]
 
+    start_at_zero = [
+        visit_node[i][0] == 0
+        for i, route_i in enumerate(routes_plus_idle)
+    ]
+
+
     # HERE I BUILD UP THE MODEL FOR THE SCHEDULING PROBLEM
     set_option(rational_to_decimal=True)
     set_option(precision=2)
@@ -227,7 +233,8 @@ def schedule(the_instance, current_routes):
         one_node_at_a_time +
         edges_direct +
         edges_inverse +
-        delayed_start
+        delayed_start +
+        start_at_zero
     )
 
     nodes_schedule = {}
@@ -257,4 +264,6 @@ def schedule(the_instance, current_routes):
                     )
                 )
 
-    return scheduling_feasibility,nodes_schedule,edges_schedule
+        return scheduling_feasibility,nodes_schedule,edges_schedule
+    else:
+        return scheduling_feasibility,nodes_schedule,edges_schedule

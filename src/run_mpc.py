@@ -31,8 +31,7 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
     VERBOSE = False
     TIMEOUT = 10000
     COORDINATOR_PERIOD = 5 # How often should the coordinator run, in seconds
-    THRESHOLD = 15
-    can_schedule = True
+    THRESHOLD = 10
 
     if recording:
         save_video_path = f'./Demo/{DATA_NAME}_{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.mp4'
@@ -44,6 +43,12 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
     cnfg_dir = os.path.join(root_dir, "config")
 
     robot_ids = None # if none, read from schedule
+    can_reschedule = True
+
+    with open(problem_path, 'r') as f:
+        problem = json.load(f)
+
+    nodes = problem["test_data"]["nodes"]
 
     ### Configurations
     config_mpc_path = os.path.join(cnfg_dir, CFG_FNAME)
@@ -73,7 +78,7 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
     for rid in robot_ids:
         robot = robot_manager.create_robot(config_robot, UnicycleModel(sampling_time=config_robot.ts), rid)
         robot.set_state(np.asarray(robot_starts[str(rid)]))
-        planner = LocalTrajPlanner(config_mpc.ts, config_mpc.N_hor, config_robot.lin_vel_max, verbose=VERBOSE)
+        planner = LocalTrajPlanner(config_mpc.ts, config_mpc.N_hor, config_robot.lin_vel_max, rid, problem_path, verbose=VERBOSE)
         planner.load_map(gpc.inflated_map.boundary_coords, gpc.inflated_map.obstacle_coords_list)
         controller = TrajectoryTracker(config_mpc, config_robot, robot_id=rid, verbose=VERBOSE)
         controller.load_motion_model(UnicycleModel(sampling_time=config_mpc.ts))
@@ -135,7 +140,7 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
                 idx_check_range=5,
                 ignore_speed_ref=ignore_speed_ref
             )
-            print(f"(K:{kt}) Robot {rid}, ref speed: {round(ref_speed if ref_speed else -1, 4)}, next goal:{planner._current_target_node}") # XXX
+            #print(f"(K:{kt}) Robot {rid}, ref speed: {round(ref_speed if ref_speed else -1, 4)}, next goal:{planner._current_target_node}") # XXX
             controller.set_current_state(robot.state)
             controller.set_ref_states(ref_states, ref_speed=ref_speed)
             if naive_tracker:
@@ -165,40 +170,48 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
             main_plotter.update_plot(rid, kt, actions[-1], None, debug_info['cost'], np.asarray(pred_states), current_refs)
             visualizer.update(*robot.state)
 
-            is_coordinating = coordinator.get_mode() != "normal"
-            if not is_coordinating or not controller.check_termination_condition(external_check=planner.idle):
+            if not controller.check_termination_condition(external_check=planner.idle):
                 incomplete = True
 
             robot_states.append(robot.state)
+            current_job = planner.get_current_job()
+            job_coord = coordinator.get_node_coord_from_name(nodes, current_job["location"])
+            job_coord_np = np.array(job_coord)
+            if np.linalg.norm(robot.state[:2] - job_coord_np[-1]) < 0.5:
+                planner.increment_jobs_completed()
 
         main_plotter.plot_in_loop(time=kt*config_mpc.ts, autorun=AUTORUN, zoom_in=None)
-        if not incomplete:
+        if not incomplete and coordinator.get_mode() == "normal":
             break
         
         # Evaluate if rescheduling should occur once per coordinator period
         time = config_mpc.ts * kt
         
-        if time % COORDINATOR_PERIOD == 0 and can_schedule:
+        if time % COORDINATOR_PERIOD == 0 and can_reschedule:
             delays_at_t = coordinator.evaluate(kt, THRESHOLD)
             delays.append(delays_at_t)
             print(f"Delay at time {time}: {delays_at_t} s")
 
             if coordinator.get_mode() == "delayed":
+                print("Rescheduling!")
                 coordinator.reschedule(kt)
+                
             
             if coordinator.get_mode() == "stopping_for_rescheduling":
                 ready_to_start = []
+                coordinator.rotate_in_place()
                 for rid in robot_ids:
                     state = robot_manager.get_robot_state(rid)
                     target = robot_manager.get_goal_state(rid)
-                    PROXIMITY = 0.5
+                    PROXIMITY = 1
                     condition = np.linalg.norm((state[:2] - target[:2])) < PROXIMITY
                     ready_to_start.append(condition)
                 if all(ready_to_start):
+                    print("Applying new schedule, resuming operation!")
                     coordinator.write_new_schedule(kt)
-                    can_schedule = False
+                    coordinator.rotate_in_place()
 
-
+# do we only need to reschdul only the delay robots 
 
 
     main_plotter.show()
