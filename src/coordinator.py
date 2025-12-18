@@ -203,7 +203,7 @@ class Coordinator:
             distance_to_target = np.sqrt(target_node[0]**2 + target_node[1]**2)
             distance_to_prev = np.sqrt(prev_node[0]**2 + prev_node[1]**2)
             if distance_to_target > distance_to_prev:
-                # If the target is occupied, return to previous node instead
+                # If the target is nearer, return to previous node instead
                 target_node, prev_node = prev_node, target_node
             self.occupied_for_reset.append(target_node)
             self.robot_manager.add_schedule(rid, robot_state, [prev_node, target_node], [prev_time, time])
@@ -388,5 +388,11 @@ class Coordinator:
             new_state = np.array([start_x, start_y, direction])
             self.robot_manager.set_robot_state(rid, new_state)
 
+    def rotate_90(self):
+        for rid in self.robot_ids:
+            state = self.robot_manager.get_robot_state(rid)
+            new_angle = (state[2] + np.pi/2) % 2*np.pi
+            new_state = [*state[0:2], new_angle]
+            self.robot_manager.set_robot_state(rid, new_state)
 
 

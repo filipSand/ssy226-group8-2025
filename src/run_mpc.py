@@ -189,6 +189,7 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
         
         if time % COORDINATOR_PERIOD == 0 and can_reschedule:
             delays_at_t = coordinator.evaluate(kt, THRESHOLD)
+
             delays.append(delays_at_t)
             print(f"Delay at time {time}: {delays_at_t} s")
 
