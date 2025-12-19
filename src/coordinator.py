@@ -83,7 +83,7 @@ class Coordinator:
             if target_is_final:
                 # Check if we're close to the target, if we are, we are finished and there is no delay
                 target = np.array([*target_node])
-                if np.linalg.norm((robot_state[:2] - target), 2) < 0.5:
+                if np.linalg.norm((robot_state[:2] - target), 2) < 0.1:
                     delays.append(0)
                     continue
 

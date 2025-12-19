@@ -191,29 +191,29 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
             delays_at_t = coordinator.evaluate(kt, THRESHOLD)
 
             delays.append(delays_at_t)
-            print(f"Delay at time {time}: {delays_at_t} s")
+
+            if coordinator.get_mode() == "normal":
+                print(f"Normal mode, delay at time {time}: {delays_at_t} s")
 
             if coordinator.get_mode() == "delayed":
-                print("Rescheduling!")
+                print(f"Rescheduling! Delay at time {time}: {delays_at_t} s")
                 coordinator.reschedule(kt)
                 
             
             if coordinator.get_mode() == "stopping_for_rescheduling":
+                print(f"Stopping for resched. Delay at time {time}: {delays_at_t} s")
                 ready_to_start = []
                 coordinator.rotate_in_place()
                 for rid in robot_ids:
                     state = robot_manager.get_robot_state(rid)
                     target = robot_manager.get_goal_state(rid)
-                    PROXIMITY = 1
+                    PROXIMITY = 0.75
                     condition = np.linalg.norm((state[:2] - target[:2])) < PROXIMITY
                     ready_to_start.append(condition)
                 if all(ready_to_start):
                     print("Applying new schedule, resuming operation!")
                     coordinator.write_new_schedule(kt)
                     coordinator.rotate_in_place()
-
-# do we only need to reschdul only the delay robots 
-
 
     main_plotter.show()
     input('Press anything to finish!')
