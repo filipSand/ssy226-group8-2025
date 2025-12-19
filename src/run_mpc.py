@@ -31,7 +31,7 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
     VERBOSE = False
     TIMEOUT = 10000
     COORDINATOR_PERIOD = 5 # How often should the coordinator run, in seconds
-    THRESHOLD = 10
+    THRESHOLD = 15
 
     if recording:
         save_video_path = f'./Demo/{DATA_NAME}_{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.mp4'
@@ -207,12 +207,13 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
                 for rid in robot_ids:
                     state = robot_manager.get_robot_state(rid)
                     target = robot_manager.get_goal_state(rid)
-                    PROXIMITY = 0.75
+                    PROXIMITY = 1
                     condition = np.linalg.norm((state[:2] - target[:2])) < PROXIMITY
                     ready_to_start.append(condition)
                 if all(ready_to_start):
                     print("Applying new schedule, resuming operation!")
                     coordinator.write_new_schedule(kt)
+                    coordinator.force_move_to_start(rid)
                     coordinator.rotate_in_place()
 
     main_plotter.show()

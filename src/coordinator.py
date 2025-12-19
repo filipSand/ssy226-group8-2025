@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import json
 import copy
+from itertools import combinations
 
 from pkg_sche.sp_comsat.Compo_slim import Compo_slim
 from pkg_motion_plan import GlobalPathCoordinator
@@ -186,27 +187,41 @@ class Coordinator:
         #self._set_all_idle()
         time = kt * self.ts
 
-        self.new_schedule_path = self.build_new_schedule(kt)
+        self.new_schedule_path, rescheduling_info, nodes_dict = self.build_new_schedule(kt)
         self.set_all_idle_mode(True)
 
         # Stop all robots
         for rid in self.robot_ids:
-            robot_planner = self.robot_manager.get_planner(rid)
-            target_node = robot_planner.current_target_node
-            ref_path = robot_planner._ref_path
-            target_node_index = self.get_target_node_index(ref_path, target_node)
-            prev_node = ref_path[target_node_index-1]
-            ref_path_times = robot_planner._ref_path_time
-            prev_time = ref_path_times[target_node_index-1]
-            robot_state = self.robot_manager.get_robot_state(rid)
+            if rid not in rescheduling_info:
+                continue
 
-            distance_to_target = np.sqrt(target_node[0]**2 + target_node[1]**2)
-            distance_to_prev = np.sqrt(prev_node[0]**2 + prev_node[1]**2)
-            if distance_to_target > distance_to_prev:
-                # If the target is nearer, return to previous node instead
-                target_node, prev_node = prev_node, target_node
-            self.occupied_for_reset.append(target_node)
-            self.robot_manager.add_schedule(rid, robot_state, [prev_node, target_node], [prev_time, time])
+            info = rescheduling_info[rid]
+            start_node_name = info['start']
+            other_node_name = info['other']
+            
+            start_node_coord = [nodes_dict[start_node_name]['x'], nodes_dict[start_node_name]['y']]
+            other_node_coord = [nodes_dict[other_node_name]['x'], nodes_dict[other_node_name]['y']]
+            
+            robot_planner = self.robot_manager.get_planner(rid)
+            ref_path = robot_planner._ref_path
+            ref_path_times = robot_planner._ref_path_time
+            
+            other_idx = self.get_target_node_index(ref_path, other_node_coord)
+            
+            if other_idx is None:
+                 # Try to find start node index and infer other
+                 start_idx = self.get_target_node_index(ref_path, start_node_coord)
+                 if start_idx is not None:
+                     # If start is at i, other is likely i-1
+                     other_idx = start_idx - 1
+                 else:
+                     raise ValueError(f"Could not find nodes in ref_path for {rid}")
+
+            prev_time = ref_path_times[other_idx]
+            robot_state = self.robot_manager.get_robot_state(rid)
+            
+            self.occupied_for_reset.append(start_node_coord)
+            self.robot_manager.add_schedule(rid, robot_state, [other_node_coord, start_node_coord], [prev_time, time])
 
         self.mode = "stopping_for_rescheduling"
 
@@ -271,7 +286,54 @@ class Coordinator:
                 return name
         raise ValueError(f"Node at {node_coords} not in nodes")
 
-    def build_new_schedule(self, kt: int, path_to_new_task: str = "./new_task.json") -> str:
+    def _determine_start_node(self, rid: str, occupied_nodes: set, nodes_dict: dict, preferred_node: str = None) -> tuple[str, str]:
+        """
+        Determines the best start node for a robot, avoiding occupied nodes.
+        Returns (chosen_node_name, other_node_name)
+        """
+        robot_planner = self.robot_manager.get_planner(rid)
+        node_idx = robot_planner._current_target_node_idx
+        ref_path = robot_planner._ref_path
+        
+        # Get coordinates from planner path
+        next_node_coord = ref_path[node_idx]
+        prev_node_coord = ref_path[node_idx - 1]
+        
+        # Get names
+        next_node_name = self.get_node_name_from_coord(nodes_dict, next_node_coord)
+        prev_node_name = self.get_node_name_from_coord(nodes_dict, prev_node_coord)
+        
+        robot_state = self.robot_manager.get_robot_state(rid)
+        
+        # Calculate distances
+        dist_to_next = np.linalg.norm(np.array(next_node_coord) - robot_state[:2])
+        dist_to_prev = np.linalg.norm(np.array(prev_node_coord) - robot_state[:2])
+        
+        # Determine preferred node
+        if preferred_node == next_node_name:
+            preferred = next_node_name
+            other = prev_node_name
+        elif preferred_node == prev_node_name:
+            preferred = prev_node_name
+            other = next_node_name
+        elif dist_to_next > dist_to_prev:
+            preferred = prev_node_name
+            other = next_node_name
+        else:
+            preferred = next_node_name
+            other = prev_node_name
+            
+        # Check occupancy
+        if preferred in occupied_nodes:
+            # Try the other one
+            preferred, other = other, preferred
+            
+        if preferred in occupied_nodes:
+            raise ValueError(f"Robot {rid} cannot find a start node. Both {preferred} and {other} are occupied.")
+            
+        return preferred, other
+
+    def build_new_schedule(self, kt: int, path_to_new_task: str = "./new_task.json") -> tuple[str, dict, dict]:
         if self.task is None:
             raise ValueError("No task file provided for rescheduling.")
         
@@ -283,6 +345,27 @@ class Coordinator:
         new_jobs = {}
         new_ATRs = {}
         occupited_start_node = set()
+        rescheduling_info = {}
+
+        # Detect swaps and force robots to advance
+        robot_edges = {}
+        for rid in self.robot_ids:
+            robot_planner = self.robot_manager.get_planner(rid)
+            node_idx = robot_planner._current_target_node_idx
+            ref_path = robot_planner._ref_path
+            next_node_name = self.get_node_name_from_coord(nodes, ref_path[node_idx])
+            prev_node_name = self.get_node_name_from_coord(nodes, ref_path[node_idx - 1])
+            robot_edges[rid] = (prev_node_name, next_node_name)
+
+        forced_starts = {}
+        for r1, r2 in combinations(self.robot_ids, 2):
+            p1, n1 = robot_edges[r1]
+            p2, n2 = robot_edges[r2]
+            # Check for swap: R1 on (A, B), R2 on (B, A)
+            if p1 == n2 and n1 == p2:
+                # Force them to advance to their targets (n1 and n2)
+                forced_starts[r1] = n1
+                forced_starts[r2] = n2
 
         for rid in self.robot_ids:
             robot_planner = self.robot_manager.get_planner(rid)
@@ -323,20 +406,11 @@ class Coordinator:
             new_jobs.update(jobs_for_rid)
 
             if jobs_for_rid:
-                next_node = ref_path[node_idx]
-                prev_node = ref_path[node_idx - 1]
-                next_node_name = self.get_node_name_from_coord(nodes, ref_path[node_idx])
-                prev_node_name = self.get_node_name_from_coord(nodes, ref_path[node_idx - 1])
-                
-                distance_to_target = np.sqrt(next_node[0]**2 + next_node[1]**2)
-                distance_to_prev = np.sqrt(prev_node[0]**2 + prev_node[1]**2)
-
-                if distance_to_target > distance_to_prev:
-                    # If the target is occupied, return to previous node instead
-                    new_ATRs[rid] = prev_node_name
-                else:
-                    new_ATRs[rid] = next_node_name
-
+                preferred = forced_starts.get(rid)
+                start_node, other_node = self._determine_start_node(rid, occupited_start_node, nodes, preferred_node=preferred)
+                new_ATRs[rid] = start_node
+                occupited_start_node.add(start_node)
+                rescheduling_info[rid] = {'start': start_node, 'other': other_node}
 
         new_json = copy.deepcopy(base_task)
         new_json["jobs"] = new_jobs
@@ -345,7 +419,7 @@ class Coordinator:
         with open(path_to_new_task, "w") as f:
             json.dump(new_json, f, indent=2)
 
-        return path_to_new_task
+        return path_to_new_task, rescheduling_info, nodes
     
     def create_schedule_df(self, solution: dict) -> dict:
         ROBOT_ID = "robot_id"
@@ -396,3 +470,9 @@ class Coordinator:
             self.robot_manager.set_robot_state(rid, new_state)
 
 
+    def force_move_to_start(self, rid):
+        path = self.robot_manager.get_planner(rid)._ref_path
+        start_node = path[0]
+        state = self.robot_manager.get_robot_state(rid)
+        new_state = np.array([start_node[0], start_node[1], state[2]])
+        self.robot_manager.set_robot_state(rid, new_state)

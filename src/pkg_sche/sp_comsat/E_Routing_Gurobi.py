@@ -216,18 +216,19 @@ def routing(the_instance, previous_routes = []):
     )
 
     # 44 routes must be closed (i.e. every vehicle that goes out has to come back)
-    route_continuity = m.addConstrs(
-        quicksum([direct_travel[k.id, i.id, j.id] for j in tasks])
-        ==
-        quicksum([direct_travel[k.id, l.id, m.id] for l in tasks])
+    # Removed as we don't have closed curcuits in our new problem formulation
+    # route_continuity = m.addConstrs(
+    #     quicksum([direct_travel[k.id, i.id, j.id] for j in tasks])
+    #     ==
+    #     quicksum([direct_travel[k.id, l.id, m.id] for l in tasks])
 
-        for k in vehicles
-        for i in tasks
-        for m in tasks
-        if i.task_type == 'start'
-        and m.task_type == 'end'
-        and i.location == m.location
-    )
+    #     for k in vehicles
+    #     for i in tasks
+    #     for m in tasks
+    #     if i.task_type == 'start'
+    #     and m.task_type == 'end'
+    #     and i.location == m.location
+    # )
 
    # 45 if a number of tasks belongs to one job, they have to take place in sequence
     # TODO reformulate this constraint...it is wrong!
