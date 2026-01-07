@@ -31,7 +31,9 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
     VERBOSE = False
     TIMEOUT = 10000
     COORDINATOR_PERIOD = 5 # How often should the coordinator run, in seconds
-    THRESHOLD = 15
+    THRESHOLD = 15 # Maximum singular delay value that triggers rescheduling in seconds
+    RESCHEDULE = True # on/off switch, set to False to disable reschuedling
+    RESUME_PROXIMITY = 1 # How close the robots must be to the rescheduling node before restarting
 
     if recording:
         save_video_path = f'./Demo/{DATA_NAME}_{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.mp4'
@@ -41,9 +43,6 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
     root_dir = pathlib.Path(__file__).resolve().parents[1]
     data_dir = os.path.join(root_dir, "data", DATA_NAME)
     cnfg_dir = os.path.join(root_dir, "config")
-
-    robot_ids = None # if none, read from schedule
-    can_reschedule = True
 
     with open(problem_path, 'r') as f:
         problem = json.load(f)
@@ -122,8 +121,6 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
         robot_states = []
         incomplete = False
         for i, rid in enumerate(robot_ids):
-            # if rid != 'A1':
-            #     continue
             robot = robot_manager.get_robot(rid)
             planner = robot_manager.get_planner(rid)
             controller = robot_manager.get_controller(rid)
@@ -151,6 +148,7 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
                                                            other_robot_states=other_robot_states,
                                                            map_updated=True, report_cost=False, ignore_speed_ref=ignore_speed_ref)
             
+            # Uncomment for debug printing. WARNING: Prints once per robot per timestep
             #controller.report_cost(debug_info['cost'],
             #                       debug_info['step_runtime'],
             #                       debug_info['monitored_cost'],
@@ -172,8 +170,9 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
 
             if not controller.check_termination_condition(external_check=planner.idle):
                 incomplete = True
-
             robot_states.append(robot.state)
+
+            # Keep track of completed jobs 
             current_job = planner.get_current_job()
             job_coord = coordinator.get_node_coord_from_name(nodes, current_job["location"])
             job_coord_np = np.array(job_coord)
@@ -187,9 +186,8 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
         # Evaluate if rescheduling should occur once per coordinator period
         time = config_mpc.ts * kt
         
-        if time % COORDINATOR_PERIOD == 0 and can_reschedule:
+        if time % COORDINATOR_PERIOD == 0 and RESCHEDULE:
             delays_at_t = coordinator.evaluate(kt, THRESHOLD)
-
             delays.append(delays_at_t)
 
             if coordinator.get_mode() == "normal":
@@ -197,9 +195,8 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
 
             if coordinator.get_mode() == "delayed":
                 print(f"Rescheduling! Delay at time {time}: {delays_at_t} s")
-                coordinator.reschedule(kt)
+                coordinator.reschedule_and_reposition(kt)
                 
-            
             if coordinator.get_mode() == "stopping_for_rescheduling":
                 print(f"Stopping for resched. Delay at time {time}: {delays_at_t} s")
                 ready_to_start = []
@@ -207,13 +204,15 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
                 for rid in robot_ids:
                     state = robot_manager.get_robot_state(rid)
                     target = robot_manager.get_goal_state(rid)
-                    PROXIMITY = 1
-                    condition = np.linalg.norm((state[:2] - target[:2])) < PROXIMITY
+                    condition = np.linalg.norm((state[:2] - target[:2])) < RESUME_PROXIMITY
                     ready_to_start.append(condition)
                 if all(ready_to_start):
+                    # FIXME In order to ensure better reliability, the robots are force-moved and rotated to the next position.
+                    # This is non-compliant with the motion model, but we still think this is acceptable for now
                     print("Applying new schedule, resuming operation!")
                     coordinator.write_new_schedule(kt)
-                    coordinator.force_move_to_start(rid)
+                    for rid in robot_ids:
+                        coordinator.force_move_to_start(rid)
                     coordinator.rotate_in_place()
 
     main_plotter.show()

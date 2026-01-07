@@ -28,7 +28,8 @@ def general_funct(path_to_problem, scheduler=True, controller=True, naive_tracke
         with open(path_to_problem,'r') as read_file:
             data = json.load(read_file)
             ATRs = data['ATRs']
-        #------------------make the intial direction of the robots to be the same as trajectory------------------------------------------
+        
+        # Start the robots facing the direction they will start in.
         robot_starts = {}
         for robot_id, nodes in solution.items():
             start_node_id = ATRs[robot_id]
@@ -43,16 +44,6 @@ def general_funct(path_to_problem, scheduler=True, controller=True, naive_tracke
             else:
                 direction = -1.57  # fallback if no path
             robot_starts[robot_id] = [start_x, start_y, direction]
-        #-----------------------------------it is end here -----------------------------------------------------------
-        # the orignal code what we get form sabino is down here 
-        # robot_starts = {
-        #     key:[
-        #         data['test_data']['nodes'][value]['x'],
-        #         data['test_data']['nodes'][value]['y'],
-        #         -1.57
-        #     ]
-        #     for key,value in ATRs.items()
-        # }
         with open(f"{data_path}/schedule_demo2_data/robot_start.json", 'w') as write_file:
             json.dump(robot_starts, write_file, indent=4)
 
@@ -64,9 +55,6 @@ def general_funct(path_to_problem, scheduler=True, controller=True, naive_tracke
         run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=ignore_speed_ref, recording=recording, problem_path=path_to_problem)
 
 if __name__ == "__main__":
-    #path_to_problem = './data/test_cases/4Small.json' # SAFETY COEFF 20
-    #path_to_problem = './data/test_cases/10Large.json' 
-    #path_to_problem = './data/test_cases/2Small.json'
     path_to_problem = './data/test_cases/4Small.json'
 
     general_funct(

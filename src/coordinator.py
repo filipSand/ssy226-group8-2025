@@ -12,7 +12,7 @@ from pkg_motion_plan import GlobalPathCoordinator
 
 class Coordinator:
     """
-    Coordinator class - TODO document
+    This class contains most coordinator code, split over many functions. It is initialized once in the beginning and then maintains its own state.
     """
     def __init__(self, robot_manager: RobotManager, robot_ids: list[str], ts: float, graph_path: str, map_path: str, config_robot: CircularRobotSpecification, schedule: str|None = None) -> None:
         self.robot_manager = robot_manager
@@ -31,17 +31,15 @@ class Coordinator:
 
     def evaluate(self, kt: int, threshold: float) -> list[float]:
         """
-        Placeholder TODO
-
-        TODO Check if my delay/earlyness impacts other robots. If they don't its probably fine to be early
+        Calculates the delay for each robot and returns a list of delays in seconds. Also sets the coordinator mode to 'rescheduling' if at least one robot has a greater delay than ``threshold``.
         Args:
             kt: The current time step
             threshold: The greatest delay of a single robot that can be tolerated before rescheduling is started
         Returns:
-            delay: The sum of the schedule delay for all robots, in seconds
+            delays: A list of delays per robot, in seconds
         """
 
-        # Skip calculations intially
+        # Skip calculations at the first time step.
         if kt == 0:
             return [0.0]*len(self.robot_ids)
 
@@ -71,10 +69,7 @@ class Coordinator:
                 break
                 
             if schedule_idx is None:
-                # If the robot has reached the finish line, set zero delay
-                raise ValueError("This shouldn't be reached")
-                delays.append(0)
-                continue
+                raise ValueError("No valid target node. Something is wrong...")
 
             scheduled_node = ref_path[schedule_idx]
             prev_sched_node = ref_path[schedule_idx - 1] 
@@ -123,18 +118,22 @@ class Coordinator:
 
         return delays
 
-    def get_target_node_index(self, ref_path, target_node):
-        robot_target_i = None
+    def get_target_node_index(self, ref_path: list[tuple], target_node:tuple) -> int:
+        """
+        Given a target node pair coordinate, get that nodes first apperance in the coordinate list
+        
+        :param ref_path: The reference path
+        :param target_node: Description
+        :return: Description
+        :rtype: Any | Literal[0] | None
+        """
         for i, node in enumerate(ref_path):
             if node == target_node:
-                robot_target_i = i
-                break
-        return robot_target_i
+                return i
 
-    def calcuate_edge_delay(self, current_time, robot_state, scheduled_node, prev_sched_node, departure_time, arrival_time, max_vel = None):
+    def calcuate_edge_delay(self, current_time: float, robot_state: list[float], scheduled_node: tuple[float], prev_sched_node: tuple[float], departure_time: float, arrival_time: float, max_vel: float|None = None):
         """
         Estimate time delay between robot and scheduled position via linear interpolation.
-        TODO Update/evaluate the way to calculate delay time
         Args:
             current_time (float): observation time.
             robot_state (Sequence[float]): (x, y) position.
@@ -175,22 +174,22 @@ class Coordinator:
         else:
             return total_offset / velocity
 
-    def reschedule(self, kt: int) -> None:
+    def reschedule_and_reposition(self, kt: int) -> None:
         """
-        1. Go to next node, if not possible, go back DONE
-        2. Figure out what jobs remain and rebuild the problem json file using these jobs DONE
-        3. Figure out what edges are blocked TODO
-        4. Call the scheduler DONE
-        5. Implement the new schedule TODO
-        6. Resume running TODO 
+        Generate the new schedule based on current robot postion and set repositioning schedule
+        
+        :param self: Description
+        :param kt: Description
+        :type kt: int
         """
-        #self._set_all_idle()
+
         time = kt * self.ts
 
+        # Build the new schedule and save it to file
         self.new_schedule_path, rescheduling_info, nodes_dict = self.build_new_schedule(kt)
         self.set_all_idle_mode(True)
 
-        # Stop all robots
+        # Send all robots to the node from where they will resume running
         for rid in self.robot_ids:
             if rid not in rescheduling_info:
                 continue
@@ -221,6 +220,7 @@ class Coordinator:
             robot_state = self.robot_manager.get_robot_state(rid)
             
             self.occupied_for_reset.append(start_node_coord)
+            # Set the schedule for each robot to go the start node, and as quickly as possible.
             self.robot_manager.add_schedule(rid, robot_state, [other_node_coord, start_node_coord], [prev_time, time])
 
         self.mode = "stopping_for_rescheduling"
@@ -288,9 +288,19 @@ class Coordinator:
 
     def _determine_start_node(self, rid: str, occupied_nodes: set, nodes_dict: dict, preferred_node: str = None) -> tuple[str, str]:
         """
-        Determines the best start node for a robot, avoiding occupied nodes.
-        Returns (chosen_node_name, other_node_name)
-        """
+        Determines the best start node for the robot ``rid``, avoiding already occupied node.
+        
+        :param rid: Robot ID
+        :type rid: str
+        :param occupied_nodes: The set of nodes already occupied by the other nodes
+        :type occupied_nodes: set
+        :param nodes_dict: All node names and their coordinates
+        :type nodes_dict: dict
+        :param preferred_node: Override the nearest node preference
+        :type preferred_node: str
+        :return: The pair (target, start) for use in repositioning for this robot
+        :rtype: tuple[str, str]
+        """""
         robot_planner = self.robot_manager.get_planner(rid)
         node_idx = robot_planner._current_target_node_idx
         ref_path = robot_planner._ref_path
@@ -309,7 +319,7 @@ class Coordinator:
         dist_to_next = np.linalg.norm(np.array(next_node_coord) - robot_state[:2])
         dist_to_prev = np.linalg.norm(np.array(prev_node_coord) - robot_state[:2])
         
-        # Determine preferred node
+        # Use preferred node is available, other take the nearest node
         if preferred_node == next_node_name:
             preferred = next_node_name
             other = prev_node_name
@@ -334,11 +344,24 @@ class Coordinator:
         return preferred, other
 
     def build_new_schedule(self, kt: int, path_to_new_task: str = "./new_task.json") -> tuple[str, dict, dict]:
+        """
+        Builds the new schedule by looking at all jobs and calculating what jobs remain to be done.
+        Also calculates where the start postitions of the robots.
+        
+        :param kt: Current time step
+        :type kt: int
+        :param path_to_new_task: Custom path to new task, is also the first return argument
+        :type path_to_new_task: str
+        :return: Returns the path to the new task, positioning information for the start of the robots and
+        all nodes
+        :rtype: tuple[str, dict, dict]
+        """
         if self.task is None:
             raise ValueError("No task file provided for rescheduling.")
         
         with open(self.task, 'r') as f:
             base_task = json.load(f)
+        # Load all nodes and jobs from the base task.
         nodes = base_task["test_data"]["nodes"]
         jobs = base_task["jobs"]
 
@@ -368,6 +391,7 @@ class Coordinator:
                 forced_starts[r2] = n2
 
         for rid in self.robot_ids:
+            # Get all jobs per robot..
             robot_planner = self.robot_manager.get_planner(rid)
             node_idx = robot_planner._current_target_node_idx
             ref_path = robot_planner._ref_path
@@ -377,6 +401,7 @@ class Coordinator:
                 if jobs[job]["ATR"] == [rid]
             }
 
+            # ... and remove jobs already completed
             planner = self.robot_manager.get_planner(rid)
             jobs_completed = planner.get_jobs_completed()
             if jobs_completed == 0:
@@ -392,7 +417,8 @@ class Coordinator:
 
             if not jobs_for_rid:
                 continue
-
+            
+            # Build the job dictionary in the format required by the scheduler
             remaining_names = set(jobs_for_rid.keys())
             ordered_jobs = list(jobs_for_rid.items())
             first_key, first_job = ordered_jobs[0]
@@ -405,6 +431,7 @@ class Coordinator:
 
             new_jobs.update(jobs_for_rid)
 
+            # If the robot has a job, determine its start node to avoid conflicting with other robot
             if jobs_for_rid:
                 preferred = forced_starts.get(rid)
                 start_node, other_node = self._determine_start_node(rid, occupited_start_node, nodes, preferred_node=preferred)
@@ -412,6 +439,7 @@ class Coordinator:
                 occupited_start_node.add(start_node)
                 rescheduling_info[rid] = {'start': start_node, 'other': other_node}
 
+        # Copy the strucutre from the base_task and update only what is necessary
         new_json = copy.deepcopy(base_task)
         new_json["jobs"] = new_jobs
         new_json["ATRs"] = new_ATRs
@@ -421,7 +449,15 @@ class Coordinator:
 
         return path_to_new_task, rescheduling_info, nodes
     
-    def create_schedule_df(self, solution: dict) -> dict:
+    def create_schedule_df(self, solution: pd.DataFrame) -> dict:
+        """
+        Convert the schedule dictionary output from the Composlim scheduler to the Pandas Dataframe that the robot manager expects
+        
+        :param solution: The solution from Compo_slim.py
+        :type solution: dict
+        :return: The converted solution
+        :rtype: pd.DataFrame
+        """
         ROBOT_ID = "robot_id"
         NODE_ID = "node_id"
         ETA = "ETA"
@@ -448,8 +484,6 @@ class Coordinator:
         This follows from the Duckiebots which may rotate in place, but
         this breaks the Unicycle defintion of the robots. Still, required
         to make progress for now
-        
-        :param self: Coordinator
         """
         for rid in self.robot_ids:
             state = self.robot_manager.get_robot_state(rid)
@@ -457,20 +491,19 @@ class Coordinator:
             start_y = state[1]
 
             planner = self.robot_manager.get_planner(rid)
-            target = planner._ref_path[1] # Target node, i.e. first node, will be start, which is not helpful
+            target = planner._ref_path[1] # First goal the target will go to
             direction = np.atan2(target[1] - start_y, target[0] - start_x)
             new_state = np.array([start_x, start_y, direction])
             self.robot_manager.set_robot_state(rid, new_state)
 
-    def rotate_90(self):
-        for rid in self.robot_ids:
-            state = self.robot_manager.get_robot_state(rid)
-            new_angle = (state[2] + np.pi/2) % 2*np.pi
-            new_state = [*state[0:2], new_angle]
-            self.robot_manager.set_robot_state(rid, new_state)
-
-
-    def force_move_to_start(self, rid):
+    def force_move_to_start(self, rid: str):
+        """
+        Set the x/y position of robot ``rid`` to the start node.
+        TODO Deprecate this function when a more robust solution can be created elsewhere 
+        
+        :param rid: Robot ID
+        :type rid: str
+        """
         path = self.robot_manager.get_planner(rid)._ref_path
         start_node = path[0]
         state = self.robot_manager.get_robot_state(rid)
