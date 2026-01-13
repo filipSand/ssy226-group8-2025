@@ -21,7 +21,7 @@ from visualizer.mpc_plot import MpcPlotInLoop # type: ignore
 
 from coordinator import Coordinator
 
-def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=False):
+def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=False, problem_path=None):
 
     DATA_NAME = "schedule_demo2_data" # "schedule_demo_data"
     CFG_FNAME = "mpc_fast.yaml" # "mpc_default.yaml" or "mpc_fast.yaml"
@@ -31,7 +31,9 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
     VERBOSE = False
     TIMEOUT = 10000
     COORDINATOR_PERIOD = 5 # How often should the coordinator run, in seconds
-    THRESHOLD = 15
+    THRESHOLD = 15 # Maximum singular delay value that triggers rescheduling in seconds
+    RESCHEDULE = True # on/off switch, set to False to disable reschuedling
+    RESUME_PROXIMITY = 1 # How close the robots must be to the rescheduling node before restarting
 
     if recording:
         save_video_path = f'./Demo/{DATA_NAME}_{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.mp4'
@@ -42,7 +44,10 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
     data_dir = os.path.join(root_dir, "data", DATA_NAME)
     cnfg_dir = os.path.join(root_dir, "config")
 
-    robot_ids = None # if none, read from schedule
+    with open(problem_path, 'r') as f:
+        problem = json.load(f)
+
+    nodes = problem["test_data"]["nodes"]
 
     ### Configurations
     config_mpc_path = os.path.join(cnfg_dir, CFG_FNAME)
@@ -72,7 +77,7 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
     for rid in robot_ids:
         robot = robot_manager.create_robot(config_robot, UnicycleModel(sampling_time=config_robot.ts), rid)
         robot.set_state(np.asarray(robot_starts[str(rid)]))
-        planner = LocalTrajPlanner(config_mpc.ts, config_mpc.N_hor, config_robot.lin_vel_max, verbose=VERBOSE)
+        planner = LocalTrajPlanner(config_mpc.ts, config_mpc.N_hor, config_robot.lin_vel_max, rid, problem_path, verbose=VERBOSE)
         planner.load_map(gpc.inflated_map.boundary_coords, gpc.inflated_map.obstacle_coords_list)
         controller = TrajectoryTracker(config_mpc, config_robot, robot_id=rid, verbose=VERBOSE)
         controller.load_motion_model(UnicycleModel(sampling_time=config_mpc.ts))
@@ -84,7 +89,7 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
         robot_manager.add_schedule(rid, np.asarray(robot_starts[str(rid)]), path_coords, path_times)
 
     ### Set up the coordinator
-    coordinator = Coordinator(robot_manager, robot_ids, config_mpc.ts)
+    coordinator = Coordinator(robot_manager, robot_ids, config_mpc.ts, graph_path, map_path, config_robot, problem_path)
     delays = []
 
     ### Run
@@ -116,8 +121,6 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
         robot_states = []
         incomplete = False
         for i, rid in enumerate(robot_ids):
-            # if rid != 'A1':
-            #     continue
             robot = robot_manager.get_robot(rid)
             planner = robot_manager.get_planner(rid)
             controller = robot_manager.get_controller(rid)
@@ -134,7 +137,7 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
                 idx_check_range=5,
                 ignore_speed_ref=ignore_speed_ref
             )
-            print(f"(K:{kt}) Robot {rid}, ref speed: {round(ref_speed if ref_speed else -1, 4)}, next goal:{planner._current_target_node}") # XXX
+            #print(f"(K:{kt}) Robot {rid}, ref speed: {round(ref_speed if ref_speed else -1, 4)}, next goal:{planner._current_target_node}") # XXX
             controller.set_current_state(robot.state)
             controller.set_ref_states(ref_states, ref_speed=ref_speed)
             if naive_tracker:
@@ -145,10 +148,11 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
                                                            other_robot_states=other_robot_states,
                                                            map_updated=True, report_cost=False, ignore_speed_ref=ignore_speed_ref)
             
-            controller.report_cost(debug_info['cost'],
-                                   debug_info['step_runtime'],
-                                   debug_info['monitored_cost'],
-                                   object_id=f"Robot {rid}")
+            # Uncomment for debug printing. WARNING: Prints once per robot per timestep
+            #controller.report_cost(debug_info['cost'],
+            #                       debug_info['step_runtime'],
+            #                       debug_info['monitored_cost'],
+            #                       object_id=f"Robot {rid}")
 
             if not actual_timetable[rid] or actual_timetable[rid][-1][1] != gpc.get_node_id(planner._current_target_node):
                 actual_timetable[rid].append((kt*config_mpc.ts, gpc.get_node_id(planner._current_target_node)))
@@ -166,23 +170,50 @@ def run_mpc(EnvFolder, naive_tracker=False, ignore_speed_ref=False, recording=Fa
 
             if not controller.check_termination_condition(external_check=planner.idle):
                 incomplete = True
-
             robot_states.append(robot.state)
 
+            # Keep track of completed jobs 
+            current_job = planner.get_current_job()
+            job_coord = coordinator.get_node_coord_from_name(nodes, current_job["location"])
+            job_coord_np = np.array(job_coord)
+            if np.linalg.norm(robot.state[:2] - job_coord_np[-1]) < 0.5:
+                planner.increment_jobs_completed()
+
         main_plotter.plot_in_loop(time=kt*config_mpc.ts, autorun=AUTORUN, zoom_in=None)
-        if not incomplete:
+        if not incomplete and coordinator.get_mode() == "normal":
             break
         
         # Evaluate if rescheduling should occur once per coordinator period
-        if config_mpc.ts * kt % COORDINATOR_PERIOD == 0:
-            delays_at_t = coordinator.evaluate(kt)
+        time = config_mpc.ts * kt
+        
+        if time % COORDINATOR_PERIOD == 0 and RESCHEDULE:
+            delays_at_t = coordinator.evaluate(kt, THRESHOLD)
             delays.append(delays_at_t)
-            print(f"Delay at time {config_mpc.ts * kt}: {delays_at_t} s")
 
-            #  TODO: implement
-            if max(delays_at_t) > THRESHOLD:
-                print("Exceeding threshold!")
+            if coordinator.get_mode() == "normal":
+                print(f"Normal mode, delay at time {time}: {delays_at_t} s")
 
+            if coordinator.get_mode() == "delayed":
+                print(f"Rescheduling! Delay at time {time}: {delays_at_t} s")
+                coordinator.reschedule_and_reposition(kt)
+                
+            if coordinator.get_mode() == "stopping_for_rescheduling":
+                print(f"Stopping for resched. Delay at time {time}: {delays_at_t} s")
+                ready_to_start = []
+                coordinator.rotate_in_place()
+                for rid in robot_ids:
+                    state = robot_manager.get_robot_state(rid)
+                    target = robot_manager.get_goal_state(rid)
+                    condition = np.linalg.norm((state[:2] - target[:2])) < RESUME_PROXIMITY
+                    ready_to_start.append(condition)
+                if all(ready_to_start):
+                    # FIXME In order to ensure better reliability, the robots are force-moved and rotated to the next position.
+                    # This is non-compliant with the motion model, but we still think this is acceptable for now
+                    print("Applying new schedule, resuming operation!")
+                    coordinator.write_new_schedule(kt)
+                    for rid in robot_ids:
+                        coordinator.force_move_to_start(rid)
+                    coordinator.rotate_in_place()
 
     main_plotter.show()
     input('Press anything to finish!')

@@ -23,6 +23,10 @@ def schedule(the_instance, current_routes):
                 []
             )
         )
+    
+    # print("DEBUG: routes_plus_idle:")
+    # for idx, r in enumerate(routes_plus_idle):
+    #     print(f"  Index {idx}: Vehicle {r.vehicle.id}, Start Node: {r.nodes[0] if r.nodes else 'None'}, Nodes: {r.nodes}")
 
     ### COMMENT THIS ON (AND THE LINE IN CONSTRAINT one_node_at_a_time TO ALLOW HUB NODES #####
     # hubs = [i.depot for i in idle_atrs]
@@ -168,15 +172,21 @@ def schedule(the_instance, current_routes):
         # and the_instance.graph.get_edge_data(*edge1)['capacity'] == 1
     ]
 
-    delayed_start = [
-        And([
-            Abs(visit_node[i][2] - visit_node[j][2]) > 20
-            for j, route_j in enumerate(routes_plus_idle)
-            if j != i and route_j.length > 1
-        ])
+    # delayed_start = [
+    #     And([
+    #         Abs(visit_node[i][2] - visit_node[j][2]) > 20
+    #         for j, route_j in enumerate(routes_plus_idle)
+    #         if j != i and route_j.length > 1
+    #     ])
+    #     for i, route_i in enumerate(routes_plus_idle)
+    #     if route_i.length > 0
+    # ]
+
+    start_at_zero = [
+        visit_node[i][0] == 0
         for i, route_i in enumerate(routes_plus_idle)
-        if route_i.length > 0
     ]
+
 
     # HERE I BUILD UP THE MODEL FOR THE SCHEDULING PROBLEM
     set_option(rational_to_decimal=True)
@@ -227,7 +237,8 @@ def schedule(the_instance, current_routes):
         one_node_at_a_time +
         edges_direct +
         edges_inverse +
-        delayed_start
+        # delayed_start +
+        start_at_zero
     )
 
     nodes_schedule = {}
@@ -257,4 +268,6 @@ def schedule(the_instance, current_routes):
                     )
                 )
 
-    return scheduling_feasibility,nodes_schedule,edges_schedule
+        return scheduling_feasibility,nodes_schedule,edges_schedule
+    else:
+        return scheduling_feasibility,nodes_schedule,edges_schedule

@@ -93,13 +93,19 @@ def json_parser(file_to_parse,monolithic = False):
     Autonomy = data['test_data']['Autonomy']
     charging_coefficient = data['test_data']['charging_coefficient']
     nodes = data['test_data']['nodes']
-    jobs = data['jobs']
+    jobs: dict = data['jobs']
     ATRs = data['ATRs']
 
     start_list = []
     for i in ATRs.values():
         if i not in start_list:
             start_list.append(i)
+
+    end_list = [
+        j for j in jobs.keys()
+        if all(j not in jobs[other].get("precedence", []) for other in jobs)
+    ]
+        
 
     if monolithic == False:
         jobs.update(
@@ -116,14 +122,14 @@ def json_parser(file_to_parse,monolithic = False):
         )
         jobs.update(
             {
-                "end_{}".format(j): {
-                            "location": j,
+                "end_{}".format(jobs[j]["location"]): {
+                            "location": jobs[j]["location"],
                             "precedence": "None",
                             "TW": [0, Big_number],
                             "Service": 0,
-                            "ATR": [i for i,k in ATRs.items() if k == j]
+                            "ATR": jobs[j]["ATR"]
                 }
-            for j in start_list
+            for j in end_list
             }
         )
     edges = {f"{i},{j}":[math.dist((node['x'],node['y']),

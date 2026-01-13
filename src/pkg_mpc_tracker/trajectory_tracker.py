@@ -323,7 +323,7 @@ class TrajectoryTracker:
         """
         if external_check:
             self.finishing = True
-            if np.allclose(self.state[:2], self.final_goal[:2], atol=0.5, rtol=0) and abs(self.past_actions[-1][0]) < 0.1:
+            if np.allclose(self.state[:2], self.final_goal[:2], atol=1, rtol=0) and abs(self.past_actions[-1][0]) < 0.1:
                 self._idle = True
                 if self.vb:
                     print(f"[{self.__class__.__name__}-{self.robot_id}] Trajectory tracking finished.")
@@ -423,7 +423,7 @@ class TrajectoryTracker:
             self.set_work_mode(mode='work', use_predefined_speed=False)
 
         ### Check if turning around ###
-        mid_idx = 0
+        mid_idx = 2
         ref_theta_diff = self.angle_diff(current_ref_theta, current_ref_theta_last)
         if (ref_theta_diff > 170):
             all_ref_thetas = np.degrees(ref_states[:, 2]) % 360
